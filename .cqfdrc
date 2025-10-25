@@ -1,0 +1,11 @@
+[project]
+org='osmos'
+name='yocto-playground'
+
+[build]
+command=''
+files=''
+archive='%Po-%Pn-%Cf-$(scripts/get-version).tar.gz'
+tar_options='-h'
+tar_transform='yes'
+
