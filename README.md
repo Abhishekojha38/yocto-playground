@@ -86,6 +86,32 @@ cqfd shell
 ```bash
 source sources/poky/oe-init-build-env
 ```
+
+Build `core-minimal-image` image.
+
+```bash
+bitbake core-minimal-image
+```
+
+---
+
+## 🖥️ Run QEMU
+
+After building the image, you can boot and test it using QEMU, the Yocto
+Project’s emulator.
+
+Setup the environment.
+
+```bash
+source sources/poky/oe-init-build-env
+```
+
+Launch QEMU in nographic mode.
+
+```bash
+runqemu qemux86-64 nographic
+```
+
 ---
 
 ## 💡 Tips
