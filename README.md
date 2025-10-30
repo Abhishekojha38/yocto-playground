@@ -72,7 +72,7 @@ git submodule update --init --recursive
 
 We are going to use `cqfd` to build the yocto in docker.
 
-Now prepare and build the yocto `qemux86-64` image.
+Now prepare and build the yocto `qemu` image.
 
 ```bash
 export CQFD_SHELL=/bin/bash
@@ -85,12 +85,14 @@ cqfd shell
 
 ```bash
 source sources/poky/oe-init-build-env
+bitbake-layers add-layer sources/meta-playground/meta-playground-os
+bitbake-layers add-layer sources/meta-playground/meta-playground-bsp
 ```
 
 Build `core-minimal-image` image.
 
 ```bash
-bitbake core-minimal-image
+DISTRO=playground-mini MACHINE=playground-x86 bitbake core-image-minimal
 ```
 
 ---
@@ -109,7 +111,7 @@ source sources/poky/oe-init-build-env
 Launch QEMU in nographic mode.
 
 ```bash
-runqemu qemux86-64 nographic
+runqemu playground-x86 nographic
 ```
 
 ---
