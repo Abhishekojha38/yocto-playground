@@ -81,18 +81,18 @@ export CQFD_SHELL=/bin/bash
 ```bash
 cqfd init
 cqfd shell
-```
-
-```bash
 source sources/poky/oe-init-build-env
 bitbake-layers add-layer sources/meta-playground/meta-playground-os
 bitbake-layers add-layer sources/meta-playground/meta-playground-bsp
+bitbake-layers add-layer ../sources/meta-openembedded/meta-oe
 ```
 
-Build `core-minimal-image` image.
+Build `playground-image` image.
 
 ```bash
-DISTRO=playground-mini MACHINE=playground-x86 bitbake core-image-minimal
+export DISTRO=playground-mini
+export MACHINE=playground-x86
+bitbake playground-image
 ```
 
 ---
