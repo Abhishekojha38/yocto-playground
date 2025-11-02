@@ -82,8 +82,8 @@ export CQFD_SHELL=/bin/bash
 cqfd init
 cqfd shell
 source sources/poky/oe-init-build-env
-bitbake-layers add-layer sources/meta-playground/meta-playground-os
-bitbake-layers add-layer sources/meta-playground/meta-playground-bsp
+bitbake-layers add-layer ../sources/meta-playground/meta-playground-os
+bitbake-layers add-layer ../sources/meta-playground/meta-playground-bsp
 bitbake-layers add-layer ../sources/meta-openembedded/meta-oe
 ```
 
