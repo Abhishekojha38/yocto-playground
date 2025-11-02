@@ -111,7 +111,7 @@ source sources/poky/oe-init-build-env
 Launch QEMU in nographic mode.
 
 ```bash
-runqemu playground-x86 nographic
+runqemu playground-x86 nographic slirp
 ```
 
 ---
