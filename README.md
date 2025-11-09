@@ -102,6 +102,7 @@ cat << EOF > conf/local.conf
 INHERIT += "buildhistory"
 MACHINE = "playground-x86"
 DISTRO = "playground-mini"
+ERROR_QA:remove = "buildpaths"
 EOF
 ```
 
