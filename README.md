@@ -26,6 +26,7 @@ yocto-playground/
 ├── README.md
 └── sources
     ├── meta-openembedded
+    ├── meta-playground
     └── poky
 ```
 
@@ -87,22 +88,35 @@ bitbake-layers add-layer ../sources/meta-playground/meta-playground-bsp
 bitbake-layers add-layer ../sources/meta-openembedded/meta-oe
 ```
 
-Build `playground-image` image.
+Lets set the `MACHINE` and `DISTRO` config.
 
 ```bash
 export DISTRO=playground-mini
 export MACHINE=playground-x86
+```
+
+`OR`
+
+```bash
+cat << EOF > conf/local.conf
+INHERIT += "buildhistory"
+MACHINE = "playground-x86"
+DISTRO = "playground-mini"
+EOF
+```
+
+```
 bitbake playground-image
 ```
 
 ---
 
-## 🖥️ Run QEMU
+## 🖥️ Using the Quick EMUlator (QEMU)
 
 After building the image, you can boot and test it using QEMU, the Yocto
 Project’s emulator.
 
-Setup the environment.
+Setting Up the Environment.
 
 ```bash
 source sources/poky/oe-init-build-env
