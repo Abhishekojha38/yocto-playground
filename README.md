@@ -110,6 +110,32 @@ EOF
 bitbake playground-image
 ```
 
+Build the SDK Installer
+
+```
+bitbake playground-image -c populate_sdk
+```
+
+Run the Installer
+
+```
+cd tmp/deploy/sdk/
+ ./poky-glibc-x86_64-playground-image-core2-64-playground-x86-toolchain-1.0.sh
+```
+By default, Installer will be installed in /opt directory
+
+```
+playground-mini SDK installer version 1.0
+=========================================
+Enter target directory for SDK (default: /opt/poky/1.0):
+You are about to install the SDK to "/opt/poky/1.0". Proceed [Y/n]?
+Extracting SDK.....................................................................................................................................done
+Setting it up...done
+SDK has been successfully set up and is ready to be used.
+Each time you wish to use the SDK in a new shell session, you need to source the environment setup script e.g.
+ $ . /opt/poky/1.0/environment-setup-core2-64-poky-linux
+```
+
 ---
 
 ## 🖥️ Using the Quick EMUlator (QEMU)
