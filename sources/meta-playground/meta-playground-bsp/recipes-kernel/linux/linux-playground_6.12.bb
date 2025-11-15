@@ -30,3 +30,8 @@ KERNEL_IMAGETYPE = "bzImage"
 # Ensure your recipe provides virtual/kernel
 PROVIDES += "virtual/kernel"
 
+do_compile:append() {
+   if (grep -q -i -e '^CONFIG_GDB_SCRIPTS=y$' .config && grep -q -e "^PHONY +=.*scripts_gdb" "${S}/Makefile"); then
+       oe_runmake ${PARALLEL_MAKE} scripts_gdb
+   fi
+}
