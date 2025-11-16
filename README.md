@@ -105,6 +105,9 @@ INHERIT += "buildhistory"
 MACHINE = "playground-x86"
 DISTRO = "playground-mini"
 ERROR_QA:remove = "buildpaths"
+WARN_QA:append = " buildpaths"
+ERROR_QA:remove = "patch-status"
+WARN_QA:append = " patch-status"
 EOF
 ```
 
@@ -123,6 +126,9 @@ INHERIT += "buildhistory"
 MACHINE = "playground-arm64"
 DISTRO = "playground-mini"
 ERROR_QA:remove = "buildpaths"
+WARN_QA:append = " buildpaths"
+ERROR_QA:remove = "patch-status"
+WARN_QA:append = " patch-status"
 EOF
 ```
 
