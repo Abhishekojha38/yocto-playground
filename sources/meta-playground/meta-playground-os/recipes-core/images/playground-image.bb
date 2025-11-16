@@ -3,7 +3,11 @@ LICENSE = "MIT"
 
 require recipes-core/images/core-image-minimal.bb
 
-IMAGE_FEATURES += "ssh-server-dropbear tools-debug"
+IMAGE_FEATURES += "\
+    ssh-server-dropbear \
+    tools-debug"
+
+EXTRA_IMAGE_FEATURES += "empty-root-password"
 
 # Add your custom package group
 IMAGE_INSTALL += "packagegroup-base"
