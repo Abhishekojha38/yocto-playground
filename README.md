@@ -90,6 +90,8 @@ bitbake-layers add-layer ../sources/meta-openembedded/meta-oe
 
 Lets set the `MACHINE` and `DISTRO` config.
 
+For `qemux86`
+
 ```bash
 export DISTRO=playground-mini
 export MACHINE=playground-x86
@@ -101,6 +103,24 @@ export MACHINE=playground-x86
 cat << EOF > conf/local.conf
 INHERIT += "buildhistory"
 MACHINE = "playground-x86"
+DISTRO = "playground-mini"
+ERROR_QA:remove = "buildpaths"
+EOF
+```
+
+For `qemuarm64`
+
+```bash
+export DISTRO=playground-mini
+export MACHINE=playground-arm64
+```
+
+`OR`
+
+```bash
+cat << EOF > conf/local.conf
+INHERIT += "buildhistory"
+MACHINE = "playground-arm64"
 DISTRO = "playground-mini"
 ERROR_QA:remove = "buildpaths"
 EOF
@@ -149,12 +169,19 @@ Setting Up the Environment.
 source sources/poky/oe-init-build-env
 ```
 
-Launch QEMU in nographic mode.
+Launch QEMU x86 in nographic mode.
 
 ```bash
 runqemu playground-x86 nographic slirp
 ```
 
+ OR
+
+Launch QEMU arm64 in nographic mode.
+
+```bash
+runqemu playground-arm64 nographic slirp
+```
 ---
 
 ## 💡 Tips
