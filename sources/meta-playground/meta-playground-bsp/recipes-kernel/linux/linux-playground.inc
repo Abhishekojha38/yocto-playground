@@ -1,5 +1,5 @@
-DESCRIPTION = "Custom Yocto kernel recipe for Playground machines (x86,ARM,etc.)"                                                                                             
-SECTION = "kernel"                                                                                                                                                             
+DESCRIPTION = "Custom Yocto kernel recipe for Playground machines (x86,ARM,etc.)"
+SECTION = "kernel"
 LICENSE = "GPL-2.0-only"
 
 DEPENDS += "xz-native bc-native"
