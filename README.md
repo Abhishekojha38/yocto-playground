@@ -190,6 +190,18 @@ runqemu playground-arm64 nographic slirp
 ```
 ---
 
+## 🧩 Custom QEMU PCI Device: Doby
+
+A custom PCI device named **Doby PCI Device** has been added for experimenting
+with QEMU device modeling, MMIO, and BAR mapping.
+
+You can find the detailed documentation, build steps, and QEMU usage examples
+in the dedicated README:
+
+👉 [Doby PCI Device README](./sources/meta-playground/meta-playground-os/recipes-devtools/qemu/README.md)
+
+---
+
 ## 💡 Tips
 - Keep each layer on the same Yocto release branch (e.g., *kirkstone*, *mickledore*, *nanbield*).
 - Use `conf/local.conf` for customizing build options.
