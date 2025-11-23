@@ -10,7 +10,7 @@ ENV LC_ALL=en_US.UTF-8
 # https://docs.yoctoproject.org/brief-yoctoprojectqs/index.html
 # and added 'tmux' to allow 'devshell' tasks
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash \
+	bash \
 	build-essential \
 	chrpath \
 	cpio \
@@ -45,16 +45,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Other useful packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	asciidoc \
-	bash \
 	bc \
 	bison \
 	ca-certificates \
 	curl \
 	flex \
-	gcc-multilib \
-	g++-multilib \
 	gir1.2-gtk-3.0 \
-	git-core \
 	libncurses5-dev \
 	libssl-dev \
 	poppler-utils \
@@ -62,7 +58,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	python3-gi \
 	rsync \
 	ruby \
-	ruby-asciidoctor-pdf \
 	ssh \
 	sshpass \
 	subversion \
