@@ -3,7 +3,7 @@ org='osmos'
 name='yocto-playground'
 
 [build]
-command=''
+command='./build.sh'
 files=''
 archive='%Po-%Pn-%Cf-$(scripts/get-version).tar.gz'
 tar_options='-h'

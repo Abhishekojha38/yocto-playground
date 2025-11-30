@@ -71,6 +71,17 @@ git submodule update --init --recursive
 
 ### 1️⃣ Source the build environment
 
+There are two way to build the image:
+
+#### Use build script to generate the image
+
+```bash
+cqfd init
+cqfd run
+```
+
+#### Manually generate the image
+
 We are going to use `cqfd` to build the yocto in docker.
 
 Now prepare and build the yocto `qemu` image.
@@ -132,25 +143,30 @@ WARN_QA:append = " patch-status"
 EOF
 ```
 
-```
+```bitbake
 bitbake playground-image
 ```
 
 Build the SDK Installer
 
-```
+```bitbake
+./build.sh --sdk|-s
+
+# OR
+
 bitbake playground-image -c populate_sdk
 ```
 
 Run the Installer
 
-```
+```bash
 cd tmp/deploy/sdk/
  ./poky-glibc-x86_64-playground-image-core2-64-playground-x86-toolchain-1.0.sh
 ```
+
 By default, Installer will be installed in /opt directory
 
-```
+```bash
 playground-mini SDK installer version 1.0
 =========================================
 Enter target directory for SDK (default: /opt/poky/1.0):
@@ -208,7 +224,7 @@ in the dedicated README:
 ---
 
 ## 🧑‍💻 Author
-**Abhishek Ojha**  
+**Abhishek Ojha**
 Abhishekojha38@gmail.com
 
 ---
