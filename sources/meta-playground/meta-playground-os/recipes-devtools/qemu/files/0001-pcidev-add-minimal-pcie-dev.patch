@@ -1,0 +1,117 @@
+From 3eb65bd58f7a1143eb8f19696fe5506e51fe2a37 Mon Sep 17 00:00:00 2001
+From: Abhishek Ojha <abhishekojha38@gmail.com>
+Date: Sun, 30 Nov 2025 13:55:23 -0500
+Subject: [PATCH] pcidev: add minimal pcie dev
+
+---
+ hw/pci/Kconfig            |  5 +++
+ hw/pci/meson.build        |  1 +
+ hw/pci/minimal_pcie_nic.c | 75 +++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 81 insertions(+)
+ create mode 100644 hw/pci/minimal_pcie_nic.c
+
+diff --git a/hw/pci/Kconfig b/hw/pci/Kconfig
+index fe70902cd..41eaf0ed1 100644
+--- a/hw/pci/Kconfig
++++ b/hw/pci/Kconfig
+@@ -16,3 +16,8 @@ config MSI_NONBROKEN
+     # or support it and have a good implementation. See commit
+     # 47d2b0f33c664533b8dbd5cb17faa8e6a01afe1f.
+     bool
++
++config MINIMAL_PCIE_NIC
++    bool
++    default y if TEST_DEVICES
++    depends on PCI
+diff --git a/hw/pci/meson.build b/hw/pci/meson.build
+index 65031b30c..282876c86 100644
+--- a/hw/pci/meson.build
++++ b/hw/pci/meson.build
+@@ -17,5 +17,6 @@ pci_ss.add(files(
+ pci_ss.add(files('pcie.c', 'pcie_aer.c'))
+ pci_ss.add(files('pcie_doe.c'))
++system_ss.add(when: 'CONFIG_MINIMAL_PCIE_NIC', if_true: files('minimal_pcie_nic.c'))
+ system_ss.add(when: 'CONFIG_PCI_EXPRESS', if_true: files('pcie_port.c', 'pcie_host.c'))
+ system_ss.add_all(when: 'CONFIG_PCI', if_true: pci_ss)
+ 
+diff --git a/hw/pci/minimal_pcie_nic.c b/hw/pci/minimal_pcie_nic.c
+new file mode 100644
+index 000000000..7c5c2793f
+--- /dev/null
++++ b/hw/pci/minimal_pcie_nic.c
+@@ -0,0 +1,75 @@
++/*
++ * minimal_pcie_nic.c
++ *
++ * Minimal skeleton PCIe NIC-like device for QEMU 9.2.0
++ *
++ * - Shows up in PCI enumeration as a Network controller
++ * - No BARs, no MMIO, no interrupts
++ */
++
++#include "qemu/osdep.h"
++#include "hw/pci/pci.h"
++#include "hw/pci/pci_device.h"
++#include "hw/qdev-properties.h"
++#include "qemu/module.h"
++#include "qapi/error.h"
++
++/* Type name */
++#define TYPE_MINIMAL_PCIE_NIC "minimal-pcie-nic"
++
++OBJECT_DECLARE_SIMPLE_TYPE(MinimalPCIeNICState, MINIMAL_PCIE_NIC)
++
++typedef struct MinimalPCIeNICState {
++    PCIDevice parent_obj;
++    /* Add device state here when needed */
++} MinimalPCIeNICState;
++
++
++/* Realize: called when a device instance is created */
++static void minimal_pcie_nic_realize(PCIDevice *pdev, Error **errp)
++{
++    /* Host-side log */
++   printf("minimal_pcie_nic: realize called (host log)");
++
++    /* Set vendor/device IDs (example IDs) */
++    pci_config_set_vendor_id(pdev->config, 0x1234);
++    pci_config_set_device_id(pdev->config, 0x11E8);
++
++    /* Set class to Network controller (Ethernet) */
++    pci_config_set_class(pdev->config, PCI_CLASS_NETWORK_ETHERNET);
++
++    /* No BARs or MMIO regions yet */
++}
++
++/* Class init: set class-level callbacks and metadata */
++static void minimal_pcie_nic_class_init(ObjectClass *klass, void *data)
++{
++    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
++
++    k->realize = minimal_pcie_nic_realize;
++    k->vendor_id = 0x1234;
++    k->device_id = 0x11E8;
++    k->class_id = PCI_CLASS_NETWORK_ETHERNET;
++
++}
++
++static void minimal_pcie_nic_register_types(void)
++{
++    static const InterfaceInfo interfaces[] = {
++        { INTERFACE_PCIE_DEVICE },
++        { }
++    };
++
++    /* Type info and registration */
++    static const TypeInfo minimal_pcie_nic_info = {
++        .name          = TYPE_MINIMAL_PCIE_NIC,
++        .parent        = TYPE_PCI_DEVICE,
++        .instance_size = sizeof(MinimalPCIeNICState),
++        .class_init    = minimal_pcie_nic_class_init,
++        .interfaces    = interfaces,
++    };
++
++    type_register_static(&minimal_pcie_nic_info);
++}
++
++type_init(minimal_pcie_nic_register_types);

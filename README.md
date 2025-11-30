@@ -206,15 +206,15 @@ runqemu playground-arm64 nographic slirp
 ```
 ---
 
-## 🧩 Custom QEMU PCI Device: Doby
+## 🧩 Test custom QEMU PCI Device
 
-A custom PCI device named **Doby PCI Device** has been added for experimenting
-with QEMU device modeling, MMIO, and BAR mapping.
+A custom PCI device named **minimal-pcie-nic** has been added for experimenting
+with QEMU device modeling.
 
 You can find the detailed documentation, build steps, and QEMU usage examples
 in the dedicated README:
 
-👉 [Doby PCI Device README](./sources/meta-playground/meta-playground-os/recipes-devtools/qemu/README.md)
+👉 [Minimal PCI Device README](https://github.com/Abhishekojha38/qemu-pcie.git/README.md)
 
 ---
 
