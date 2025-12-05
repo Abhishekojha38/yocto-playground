@@ -4,15 +4,16 @@ LICENSE = "MIT"
 inherit packagegroup
 
 RDEPENDS:${PN} = " \
-    vim \
-    git \
-    htop \
-    strace \
-    lsof \
+    coreutils \
+    devmem2 \
     ethtool \
     gdb \
-    usbutils \
+    git \
+    htop \
+    lsof \
     pciutils \
-    coreutils \
+    strace \
+    usbutils \
+    vim \
 "
 
