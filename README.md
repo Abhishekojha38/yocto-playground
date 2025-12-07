@@ -214,7 +214,7 @@ with QEMU device modeling.
 You can find the detailed documentation, build steps, and QEMU usage examples
 in the dedicated README:
 
-👉 [Minimal PCI Device README](https://github.com/Abhishekojha38/qemu-pcie.git/README.md)
+👉 [Minimal PCI Device README](https://github.com/Abhishekojha38/qemu-pcie/blob/main/README.md)
 
 ---
 
