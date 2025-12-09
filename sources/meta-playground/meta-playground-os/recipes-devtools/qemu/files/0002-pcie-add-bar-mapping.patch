@@ -1,14 +1,14 @@
-From ab3889110551b07748d601ad0a468296ea8f7631 Mon Sep 17 00:00:00 2001
+From 7a876a1c5b9ecb140a8a5e5d86096193225ebd6f Mon Sep 17 00:00:00 2001
 From: Abhishek Ojha <abhishek.ojha@savoirfairelinux.com>
 Date: Thu, 4 Dec 2025 22:02:40 -0500
 Subject: [PATCH] pcie: add bar mapping
 
 ---
- hw/pci/minimal_pcie_nic.c | 133 +++++++++++++++++++++++++++++++++-----
- 1 file changed, 116 insertions(+), 17 deletions(-)
+ hw/pci/minimal_pcie_nic.c | 147 ++++++++++++++++++++++++++++++++------
+ 1 file changed, 126 insertions(+), 21 deletions(-)
 
 diff --git a/hw/pci/minimal_pcie_nic.c b/hw/pci/minimal_pcie_nic.c
-index 7c5c2793f..bfb5c588f 100644
+index 7c5c2793f..eaf8288e5 100644
 --- a/hw/pci/minimal_pcie_nic.c
 +++ b/hw/pci/minimal_pcie_nic.c
 @@ -2,9 +2,14 @@
@@ -28,7 +28,7 @@ index 7c5c2793f..bfb5c588f 100644
   */
  
  #include "qemu/osdep.h"
-@@ -13,46 +18,140 @@
+@@ -13,46 +18,146 @@
  #include "hw/qdev-properties.h"
  #include "qemu/module.h"
  #include "qapi/error.h"
@@ -135,15 +135,16 @@ index 7c5c2793f..bfb5c588f 100644
 -    /* Host-side log */
 -   printf("minimal_pcie_nic: realize called (host log)");
 +    MinimalPCIeNICState *s = MINIMAL_PCIE_NIC(pdev);
-+
-+    printf("minimal_pcie_nic: realize called (host log)\n");
  
 -    /* Set vendor/device IDs (example IDs) */
-+    /* PCI config space: set vendor/device IDs and class */
-     pci_config_set_vendor_id(pdev->config, 0x1234);
-     pci_config_set_device_id(pdev->config, 0x11E8);
--
+-    pci_config_set_vendor_id(pdev->config, 0x1234);
+-    pci_config_set_device_id(pdev->config, 0x11E8);
++    printf("minimal_pcie_nic: realize called (host log)\n");
+ 
 -    /* Set class to Network controller (Ethernet) */
++    /* PCI config space: set vendor/device IDs and class */
++    pci_config_set_vendor_id(pdev->config, 0x1af4);
++    pci_config_set_device_id(pdev->config, 0x10f1);
      pci_config_set_class(pdev->config, PCI_CLASS_NETWORK_ETHERNET);
  
 -    /* No BARs or MMIO regions yet */
@@ -165,17 +166,25 @@ index 7c5c2793f..bfb5c588f 100644
  }
  
 -/* Class init: set class-level callbacks and metadata */
++static void minimal_pcie_nic_uninit(PCIDevice *pdev)
++{
++    printf("pcie nic un-init\n");
++}
++
 +/* Class initialization */
  static void minimal_pcie_nic_class_init(ObjectClass *klass, void *data)
  {
      PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
  
 -    k->realize = minimal_pcie_nic_realize;
-+    k->realize  = minimal_pcie_nic_realize;
-     k->vendor_id = 0x1234;
-     k->device_id = 0x11E8;
+-    k->vendor_id = 0x1234;
+-    k->device_id = 0x11E8;
 -    k->class_id = PCI_CLASS_NETWORK_ETHERNET;
 -
++    k->realize  = minimal_pcie_nic_realize;
++    k->exit = minimal_pcie_nic_uninit;
++    k->vendor_id = 0x1af4;
++    k->device_id = 0x10f1;
 +    k->class_id  = PCI_CLASS_NETWORK_ETHERNET;
  }
  
@@ -183,7 +192,7 @@ index 7c5c2793f..bfb5c588f 100644
  static void minimal_pcie_nic_register_types(void)
  {
      static const InterfaceInfo interfaces[] = {
-@@ -60,7 +159,6 @@ static void minimal_pcie_nic_register_types(void)
+@@ -60,7 +165,6 @@ static void minimal_pcie_nic_register_types(void)
          { }
      };
  
@@ -191,9 +200,11 @@ index 7c5c2793f..bfb5c588f 100644
      static const TypeInfo minimal_pcie_nic_info = {
          .name          = TYPE_MINIMAL_PCIE_NIC,
          .parent        = TYPE_PCI_DEVICE,
-@@ -72,4 +170,5 @@ static void minimal_pcie_nic_register_types(void)
+@@ -72,4 +176,5 @@ static void minimal_pcie_nic_register_types(void)
      type_register_static(&minimal_pcie_nic_info);
  }
  
+-type_init(minimal_pcie_nic_register_types);
 +/* Initialize the type at QEMU startup */
- type_init(minimal_pcie_nic_register_types);
++type_init(minimal_pcie_nic_register_types);
+\ No newline at end of file
