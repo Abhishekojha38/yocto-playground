@@ -204,6 +204,7 @@ Launch QEMU arm64 in nographic mode.
 ```bash
 runqemu playground-arm64 nographic slirp
 ```
+
 ---
 
 ## 🧩 Test custom QEMU PCI Device
