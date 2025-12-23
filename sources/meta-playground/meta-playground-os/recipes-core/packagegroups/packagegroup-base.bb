@@ -4,6 +4,7 @@ LICENSE = "MIT"
 inherit packagegroup
 
 RDEPENDS:${PN} = " \
+    bpftool \
     coreutils \
     devmem2 \
     ethtool \
