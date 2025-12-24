@@ -12,6 +12,7 @@ RDEPENDS:${PN} = " \
     git \
     htop \
     lsof \
+    minimal-pcie-nic \
     pciutils \
     strace \
     usbutils \
