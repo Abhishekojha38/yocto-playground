@@ -1,9 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 DESCRIPTION = "Minimal PCIe NIC driver with MSI-X"
 
-LICENSE = "GPL-2.0-or-later"
-
-LIC_FILES_CHKSUM = "file://minimal_pcie_nic_drv.c;md5=960ebd3ff1caf7fcf72b18953f75b2ff"
+LICENSE = "CLOSED"
 
 SRC_URI = "file://minimal_pcie_nic_drv.c \
            file://Makefile"
