@@ -13,6 +13,7 @@ RDEPENDS:${PN} = " \
     htop \
     lsof \
     minimal-pcie-nic \
+    net-tools \
     pciutils \
     strace \
     usbutils \
