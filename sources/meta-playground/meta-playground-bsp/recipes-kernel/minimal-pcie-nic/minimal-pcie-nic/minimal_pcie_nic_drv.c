@@ -80,8 +80,7 @@ static irqreturn_t minimal_irq_handler(int irq, void *dev_id)
     /*FIXME*/
     for (i = 0; i < RX_RING_SIZE; i++) {
         if (mdev->rx_ring[i].flags & RX_DONE) {
-            pr_info("minimal_nic: RX packet len=%u\n",
-                    mdev->rx_ring[i].len);
+            pr_info("minimal_pcie_nic: RX[%d] len=%u\n", i, mdev->rx_ring[i].len);
 
             /* mark buffer free again */
             mdev->rx_ring[i].flags = 0;
@@ -204,6 +203,11 @@ static int minimal_probe(struct pci_dev *pdev,
             sizeof(struct rx_desc) * RX_RING_SIZE,
             &mdev->rx_ring_dma, GFP_KERNEL);
 
+    pr_info("RX ring VA=%p  DMA=%pad  size=%zu\n",
+        mdev->rx_ring,
+        &mdev->rx_ring_dma,
+        sizeof(struct rx_desc) * RX_RING_SIZE);
+
     /* Here are 16 empty buffers of 2048 bytes each */
     for (i = 0; i < RX_RING_SIZE; i++) {
         mdev->rx_bufs[i] = dma_alloc_coherent(&pdev->dev,
@@ -214,6 +218,12 @@ static int minimal_probe(struct pci_dev *pdev,
         mdev->rx_ring[i].addr = mdev->rx_bufs_dma[i];
         mdev->rx_ring[i].len = RX_BUF_SIZE;
         mdev->rx_ring[i].flags = 0;
+
+        pr_info("RX[%02d] desc_va=%p  buf_va=%p  buf_dma=%pad\n",
+            i,
+            &mdev->rx_ring[i],
+            mdev->rx_bufs[i],
+            &mdev->rx_bufs_dma[i]);
     }
 
     /* Program device */
