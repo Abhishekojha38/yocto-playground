@@ -1,27 +1,35 @@
 #!/bin/sh
 set -e
 
+# Get the absolute path to the script directory
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+
 # Default values
-BUILD_SDK=0
+CUSTOM_COMMAND=""
 
 # Parse arguments
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --sdk|-s)
-            BUILD_SDK=1
+        --)
             shift
+            CUSTOM_COMMAND="$*"
+            break
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [[--] command...]"
+            exit 1
             ;;
         *)
-            echo "Unknown option: $1"
-            echo "Usage: $0 [--sdk|-s]"
-            exit 1
+            CUSTOM_COMMAND="$*"
+            break
             ;;
     esac
 done
 
 # Read configuration
-if [ -f "build.conf" ]; then
-    . ./build.conf
+if [ -f "$SCRIPT_DIR/build.conf" ]; then
+    . "$SCRIPT_DIR/build.conf"
 else
     echo "Error: build.conf not found."
     exit 1
@@ -33,30 +41,40 @@ if [ -z "$MACHINE" ] || [ -z "$DISTRO" ]; then
 fi
 
 echo "Building for MACHINE=$MACHINE DISTRO=$DISTRO"
-if [ "$BUILD_SDK" -eq 1 ]; then
-    echo "SDK build enabled"
+
+
+if [ -n "$CUSTOM_COMMAND" ]; then
+    echo "Custom command: $CUSTOM_COMMAND"
 fi
 
 # Source the build environment
 # We need to be in the directory of the script for it to work correctly with sh
 # In dash (default /bin/sh on Debian/Ubuntu), . command does not accept arguments.
 # It uses the current positional parameters. So we must set them.
-cd sources/poky
+cd "$SCRIPT_DIR/sources/poky"
 set -- ../../build
 . ./oe-init-build-env
 # DO NOT cd back. We want to stay in the build directory.
 
-# Add layers
-# We are now in the build directory, so paths are relative to build/
-# sources is at ../sources
-bitbake-layers add-layer ../sources/meta-playground/meta-playground-os || true
-bitbake-layers add-layer ../sources/meta-playground/meta-playground-bsp || true
-bitbake-layers add-layer ../sources/meta-openembedded/meta-oe || true
+# Add layers from layers.conf
+LAYERS_CONF="$SCRIPT_DIR/layers.conf"
+if [ -f "$LAYERS_CONF" ]; then
+    echo "Adding layers from $LAYERS_CONF..."
+    # Read ignoring comments and empty lines
+    grep -vE '^\s*#|^\s*$' "$LAYERS_CONF" | while read -r layer; do
+        echo "Adding layer: $layer"
+        bitbake-layers add-layer "$layer" || true
+    done
+else
+    echo "Warning: layers.conf not found at $LAYERS_CONF"
+fi
+
+# Execute custom command if provided
+if [ -n "$CUSTOM_COMMAND" ]; then
+    echo "Executing: $CUSTOM_COMMAND"
+    eval "$CUSTOM_COMMAND"
+    exit $?
+fi
 
 # Run build
 bitbake playground-image
-
-if [ "$BUILD_SDK" -eq 1 ]; then
-    echo "Building SDK..."
-    bitbake playground-image -c populate_sdk
-fi
