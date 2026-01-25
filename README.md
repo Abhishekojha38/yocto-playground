@@ -20,14 +20,13 @@ This repository is designed to:
 
 ```
 yocto-playground/
-├── .gitmodules
-├── .cqfd
+.
 ├── build
+├── build.conf
+├── build.sh
+├── layers.conf
 ├── README.md
 └── sources
-    ├── meta-openembedded
-    ├── meta-playground
-    └── poky
 ```
 
 ---
@@ -80,6 +79,9 @@ cqfd init
 cqfd run
 ```
 
+> Use `build.conf` to set the `MACHINE` and `DISTRO` and use `layer.conf` to add the list of layers required for the build.
+
+
 #### Manually generate the image
 
 We are going to use `cqfd` to build the yocto in docker.
@@ -87,75 +89,28 @@ We are going to use `cqfd` to build the yocto in docker.
 Now prepare and build the yocto `qemu` image.
 
 ```bash
-export CQFD_SHELL=/bin/bash
+cqfd run ./build.sh -- bitbake playground-image 
 ```
 
-```bash
-cqfd init
-cqfd shell
-source sources/poky/oe-init-build-env
-bitbake-layers add-layer ../sources/meta-playground/meta-playground-os
-bitbake-layers add-layer ../sources/meta-playground/meta-playground-bsp
-bitbake-layers add-layer ../sources/meta-openembedded/meta-oe
-```
+> Set `export CQFD_SHELL=/bin/bash` on the terminal if using `cqfd shell`. 
 
-Lets set the `MACHINE` and `DISTRO` config.
-
-For `qemux86`
-
-```bash
-export DISTRO=playground-mini
-export MACHINE=playground-x86
-```
-
-`OR`
+Disable QA Errors
 
 ```bash
 cat << EOF > conf/local.conf
-INHERIT += "buildhistory"
-MACHINE = "playground-x86"
-DISTRO = "playground-mini"
 ERROR_QA:remove = "buildpaths"
 WARN_QA:append = " buildpaths"
 ERROR_QA:remove = "patch-status"
 WARN_QA:append = " patch-status"
 EOF
-```
-
-For `qemuarm64`
-
-```bash
-export DISTRO=playground-mini
-export MACHINE=playground-arm64
-```
-
-`OR`
-
-```bash
-cat << EOF > conf/local.conf
-INHERIT += "buildhistory"
-MACHINE = "playground-arm64"
-DISTRO = "playground-mini"
-ERROR_QA:remove = "buildpaths"
-WARN_QA:append = " buildpaths"
-ERROR_QA:remove = "patch-status"
-WARN_QA:append = " patch-status"
-EOF
-```
-
-```bitbake
-bitbake playground-image
 ```
 
 Build the SDK Installer
 
-```bitbake
-./build.sh --sdk|-s
-
-# OR
-
-bitbake playground-image -c populate_sdk
+```bash
+cqfd run ./build.sh -- bitbake playground-image -c populate_sdk
 ```
+
 
 Run the Installer
 
@@ -177,6 +132,10 @@ SDK has been successfully set up and is ready to be used.
 Each time you wish to use the SDK in a new shell session, you need to source the environment setup script e.g.
  $ . /opt/poky/1.0/environment-setup-core2-64-poky-linux
 ```
+> User: `root`
+> Password: `root`
+
+![image](QEMU-Logs.png)
 
 ---
 
