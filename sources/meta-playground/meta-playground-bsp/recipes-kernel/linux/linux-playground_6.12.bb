@@ -22,7 +22,8 @@ SRC_URI:append:playground-x86 = " file://defconfig-x86"
 S = "${WORKDIR}/git"
 
 # Compatible machines — ensure your MACHINE includes this pattern
-COMPATIBLE_MACHINE = "playground-*"
+COMPATIBLE_MACHINE:playground-arm64 = "(playground-arm64)"
+COMPATIBLE_MACHINE:playground-x86 = "(playground-x86)"
 
 # Ensure your recipe provides virtual/kernel
 PROVIDES += "virtual/kernel"
@@ -31,4 +32,9 @@ do_compile:append() {
    if (grep -q -i -e '^CONFIG_GDB_SCRIPTS=y$' .config && grep -q -e "^PHONY +=.*scripts_gdb" "${S}/Makefile"); then
        oe_runmake ${PARALLEL_MAKE} scripts_gdb
    fi
+}
+
+do_configure:prepend() {
+    bbnote "Copying ${KBUILD_DEFCONFIG} to defconfig"
+    cp ${UNPACKDIR}/${KBUILD_DEFCONFIG} ${UNPACKDIR}/defconfig
 }
