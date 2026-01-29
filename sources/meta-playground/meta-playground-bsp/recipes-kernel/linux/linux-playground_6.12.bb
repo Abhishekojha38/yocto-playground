@@ -16,12 +16,14 @@ SRCREV = "v${PV}"
 SRC_URI = "git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git;protocol=https;branch=linux-6.12.y"
 
 # Use your own defconfig
+SRC_URI:append:playground-arm = " file://defconfig-arm"
 SRC_URI:append:playground-arm64 = " file://defconfig-arm64"
 SRC_URI:append:playground-x86 = " file://defconfig-x86"
 
 S = "${WORKDIR}/git"
 
 # Compatible machines — ensure your MACHINE includes this pattern
+COMPATIBLE_MACHINE:playground-arm = "(playground-arm)"
 COMPATIBLE_MACHINE:playground-arm64 = "(playground-arm64)"
 COMPATIBLE_MACHINE:playground-x86 = "(playground-x86)"
 
