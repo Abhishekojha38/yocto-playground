@@ -52,9 +52,25 @@ fi
 # In dash (default /bin/sh on Debian/Ubuntu), . command does not accept arguments.
 # It uses the current positional parameters. So we must set them.
 cd "$SCRIPT_DIR/sources/poky"
-set -- ../../build
+set -- ../../build-"${MACHINE}"
 . ./oe-init-build-env
+
+echo "Build directory: build-"${MACHINE}" "
 # DO NOT cd back. We want to stay in the build directory.
+
+# Append machine and distro to local.conf
+cat <<EOF > conf/local.conf
+DISTRO = "${DISTRO}"
+MACHINE = "${MACHINE}"
+EOF
+
+# Disable QA errors
+cat <<EOF >> conf/local.conf
+ERROR_QA:remove = "buildpaths"
+WARN_QA:append = " buildpaths"
+ERROR_QA:remove = "patch-status"
+WARN_QA:append = " patch-status"
+EOF
 
 # Add layers from layers.conf
 LAYERS_CONF="$SCRIPT_DIR/layers.conf"
