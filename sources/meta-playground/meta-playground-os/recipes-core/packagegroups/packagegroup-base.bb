@@ -4,7 +4,6 @@ LICENSE = "MIT"
 inherit packagegroup
 
 RDEPENDS:${PN} = " \
-    bpftool \
     coreutils \
     devmem2 \
     ethtool \
@@ -12,7 +11,6 @@ RDEPENDS:${PN} = " \
     git \
     htop \
     lsof \
-    minimal-pcie-nic \
     net-tools \
     pciutils \
     strace \
@@ -20,3 +18,4 @@ RDEPENDS:${PN} = " \
     vim \
 "
 
+RDEPENDS:${PN}:append:playground-arm64 = " minimal-pcie-nic"
