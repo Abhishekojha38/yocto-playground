@@ -4,3 +4,6 @@
 [submodule "sources/meta-openembedded"]
 	path = sources/meta-openembedded
 	url = https://git.openembedded.org/meta-openembedded
+[submodule "sources/meta-ollama"]
+	path = sources/meta-ollama
+	url = https://github.com/Abhishekojha38/meta-ollama.git
