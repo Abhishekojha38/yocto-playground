@@ -40,9 +40,12 @@ if [ -z "$MACHINE" ] || [ -z "$DISTRO" ]; then
     exit 1
 fi
 
-echo "Building for MACHINE=$MACHINE DISTRO=$DISTRO"
+if [ -z "$IMAGE" ]; then
+    echo "Error: IMAGE must be set in build.conf"
+    exit 1
+fi
 
-
+echo "Building for MACHINE=$MACHINE DISTRO=$DISTRO IMAGE=$IMAGE"
 if [ -n "$CUSTOM_COMMAND" ]; then
     echo "Custom command: $CUSTOM_COMMAND"
 fi
@@ -55,7 +58,8 @@ cd "$SCRIPT_DIR/sources/poky"
 set -- ../../build-"${MACHINE}"
 . ./oe-init-build-env
 
-echo "Build directory: build-"${MACHINE}" "
+echo "Build directory: build-${MACHINE}"
+
 # DO NOT cd back. We want to stay in the build directory.
 
 # Append machine and distro to local.conf
@@ -77,10 +81,15 @@ LAYERS_CONF="$SCRIPT_DIR/layers.conf"
 if [ -f "$LAYERS_CONF" ]; then
     echo "Adding layers from $LAYERS_CONF..."
     # Read ignoring comments and empty lines
-    grep -vE '^\s*#|^\s*$' "$LAYERS_CONF" | while read -r layer; do
+    # Use a different approach to avoid subshell issues
+    while IFS= read -r layer; do
+        # Skip empty lines and comments
+        case "$layer" in
+            ''|'#'*) continue ;;
+        esac
         echo "Adding layer: $layer"
-        bitbake-layers add-layer "$layer" || true
-    done
+        bitbake-layers add-layer "$layer" 2>/dev/null || echo "Warning: Could not add layer $layer (may already exist)"
+    done < "$LAYERS_CONF"
 else
     echo "Warning: layers.conf not found at $LAYERS_CONF"
 fi
@@ -92,5 +101,5 @@ if [ -n "$CUSTOM_COMMAND" ]; then
     exit $?
 fi
 
-# Run build
-bitbake playground-image
+# Run build with image from build.conf
+bitbake "$IMAGE"
