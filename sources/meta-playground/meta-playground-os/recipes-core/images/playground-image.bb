@@ -7,10 +7,34 @@ IMAGE_FEATURES += "\
     ssh-server-dropbear \
     tools-debug"
 
+# Additional packages for Ollama
+IMAGE_INSTALL:append = " \
+    ollama \
+    curl \
+    ca-certificates \
+    vim \
+    htop \
+    ncurses \
+    procps \
+"
+
+# Network configuration
+IMAGE_INSTALL:append = " \
+    iproute2 \
+    iptables \
+"
+
+# Optional: Add tools for debugging and monitoring
+IMAGE_INSTALL:append = " \
+    strace \
+    lsof \
+    wget \
+"
+
 EXTRA_IMAGE_FEATURES += "empty-root-password"
 
 # Add your custom package group
-IMAGE_INSTALL += "packagegroup-base"
+IMAGE_INSTALL += "packagegroup-base packagegroup-playground-base"
 
 IMAGE_LINGUAS = "en-us"
 
@@ -23,3 +47,6 @@ EXTRA_USERS_PARAMS = "\
     usermod -p '${PASSWD}' root; \
     "
 
+# Extra space for models (approximately 5GB)
+# Adjust this based on which models you plan to use
+IMAGE_ROOTFS_EXTRA_SPACE = "5242880"
