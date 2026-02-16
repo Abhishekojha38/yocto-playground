@@ -7,3 +7,6 @@
 [submodule "sources/meta-ollama"]
 	path = sources/meta-ollama
 	url = https://github.com/Abhishekojha38/meta-ollama.git
+[submodule "sources/meta-ollama-cpp"]
+	path = sources/meta-ollama-cpp
+	url = https://github.com/Abhishekojha38/meta-ollama-cpp.git
