@@ -34,7 +34,7 @@ IMAGE_INSTALL:append = " \
 EXTRA_IMAGE_FEATURES += "empty-root-password"
 
 # Add your custom package group
-IMAGE_INSTALL += "packagegroup-base packagegroup-playground-base"
+IMAGE_INSTALL += "packagegroup-base packagegroup-playground-base packagegroup-playground-graphics"
 
 IMAGE_LINGUAS = "en-us"
 
