@@ -9,13 +9,16 @@ IMAGE_FEATURES += "\
 
 # Additional packages for Ollama
 IMAGE_INSTALL:append = " \
-    ollama \
     curl \
     ca-certificates \
     vim \
     htop \
     ncurses \
     procps \
+"
+
+IMAGE_INSTALL:append:playground-arm64 = " \
+    ollama \
 "
 
 # Network configuration
