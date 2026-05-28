@@ -168,7 +168,6 @@ typedef struct MinimalPCIeNICState {
 
     NICState *nic;
     NICConf conf;
-    NetClientState *nc;
 
     uint64_t rx_ring_base;
     uint32_t rx_ring_size;
@@ -537,8 +536,8 @@ static ssize_t minimal_receive_packet(NetClientState *nc,
     uint64_t desc_addr;
 
     /* Step 1: Drop packet if driver hasn't initialized the RX ring yet. */
-    if (!s->rx_ring_size)
-        return 0;   // driver not ready
+    if (!s->rx_ring_size || !s->rx_ring_base)
+        return 0;   /* driver not ready */
 
     /* Step 2: Locate the next RX descriptor in the ring. */
     desc_addr = s->rx_ring_base +
@@ -547,6 +546,10 @@ static ssize_t minimal_receive_packet(NetClientState *nc,
     /* Step 3: Read RX descriptor from guest memory to learn buffer address. */
     pci_dma_read(&s->parent_obj,
                  desc_addr, &desc, sizeof(desc));
+
+    /* Drop packet if the driver has not reclaimed this descriptor yet. */
+    if (desc.flags & RX_DONE)
+        return 0;   /* ring full — driver is behind */
 
     /* Step 4: DMA packet payload into the guest buffer the driver prepared. */
     pci_dma_write(&s->parent_obj,
@@ -565,7 +568,9 @@ static ssize_t minimal_receive_packet(NetClientState *nc,
 
     /* Step 7: Interrupt the guest driver via MSI-X vector 0. */
     minimal_raise_irq(s, 0);
-    printf("minimal_pcie_nic: MSI-X interrupt triggered\n");
+#ifdef DEBUG
+    printf("minimal_pcie_nic: RX packet delivered, MSI-X vector 0 fired\n");
+#endif
 
     return size;
 }
@@ -732,7 +737,7 @@ static void minimal_pcie_nic_uninit(PCIDevice *pdev)
 
     /* Clean up MSI/MSI-X */
 #ifdef MSIX_ENABLE
-    msix_uninit(pdev);
+    msix_uninit(pdev, &s->msix_bar, &s->msix_bar);
 #else
     msi_uninit(pdev);
 #endif

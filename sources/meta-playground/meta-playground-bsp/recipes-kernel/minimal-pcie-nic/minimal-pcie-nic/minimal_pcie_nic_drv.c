@@ -75,16 +75,17 @@ static const struct net_device_ops minimal_netdev_ops = {
 static irqreturn_t minimal_irq_handler(int irq, void *dev_id)
 {
     struct minimal_dev *mdev = dev_id;
-    int i;
+    u32 head = readl(mdev->bar0 + REG_RX_HEAD);
+    u32 tail = readl(mdev->bar0 + REG_RX_TAIL);
+    u32 i = tail;
 
-    /*FIXME*/
-    for (i = 0; i < RX_RING_SIZE; i++) {
+    /* Walk only newly-completed descriptors from tail up to head. */
+    while (i != head) {
         if (mdev->rx_ring[i].flags & RX_DONE) {
-            pr_info("minimal_pcie_nic: RX[%d] len=%u\n", i, mdev->rx_ring[i].len);
-
-            /* mark buffer free again */
+            pr_info("minimal_pcie_nic: RX[%u] len=%u\n", i, mdev->rx_ring[i].len);
             mdev->rx_ring[i].flags = 0;
         }
+        i = (i + 1) % RX_RING_SIZE;
     }
     return IRQ_HANDLED;
 }
@@ -94,56 +95,45 @@ static int minimal_probe(struct pci_dev *pdev,
 {
     struct minimal_dev *mdev;
     struct net_device *ndev;
-    int ret, nvec, i;
+    int ret, i;
 
     pr_info(DRV_NAME ": probe\n");
 
-    ndev = alloc_etherdev(0);
+    ndev = alloc_etherdev(sizeof(*mdev));
     if (!ndev)
         return -ENOMEM;
 
-    mdev = devm_kzalloc(&pdev->dev, sizeof(*mdev), GFP_KERNEL);
-    if (!mdev)
-        return -ENOMEM;
-
+    mdev = netdev_priv(ndev);
     mdev->pdev = pdev;
-    pci_set_drvdata(pdev, mdev);
-
     mdev->netdev = ndev;
+    pci_set_drvdata(pdev, ndev);  /* store ndev; mdev = netdev_priv(ndev) */
+
     ndev->netdev_ops = &minimal_netdev_ops;
     ndev->min_mtu = 68;
     ndev->max_mtu = 1500;
 
     eth_hw_addr_random(ndev);
-
     SET_NETDEV_DEV(ndev, &pdev->dev);
 
-    ret = register_netdev(ndev);
-    if (ret) {
-        free_netdev(ndev);
-        return ret;
-    }
-
-    pr_info(DRV_NAME ": registered netdev %s\n", ndev->name);
-
-
-
-    /* Enable PCI device and bus-mastering */
+    /* Enable PCI device and bus-mastering before any hardware access */
     pr_info(DRV_NAME ": PCI enable device\n");
     ret = pci_enable_device(pdev);
-    if (ret) {
-        unregister_netdev(ndev);
-        free_netdev(ndev);
-        return ret;
-    }
+    if (ret)
+        goto err_free_netdev;
 
     pci_set_master(pdev);
+
+    ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+    if (ret) {
+        dev_err(&pdev->dev, "Cannot set 64-bit DMA mask\n");
+        goto err_disable;
+    }
 
 #ifdef MSIX_ENABLE
     /* Request MSI-X vectors explicitly */
     mdev->nvec_irq = pci_alloc_irq_vectors(pdev,
-                                           1,    // min vectors
-                                           MAX_MSIX_VECTORS,    // max vectors
+                                           1,
+                                           MAX_MSIX_VECTORS,
                                            PCI_IRQ_MSIX);
 #else
     /* Fallback to MSI with per-vector masking */
@@ -153,8 +143,10 @@ static int minimal_probe(struct pci_dev *pdev,
                                 PCI_IRQ_MSI);
 #endif
 
-    if (mdev->nvec_irq < 0)
-        return mdev->nvec_irq;
+    if (mdev->nvec_irq < 0) {
+        ret = mdev->nvec_irq;
+        goto err_disable;
+    }
 
     for (i = 0; i < mdev->nvec_irq; i++) {
         int irq = pci_irq_vector(pdev, i);
@@ -185,7 +177,7 @@ static int minimal_probe(struct pci_dev *pdev,
     /* Map BAR1 (MSI-X table/PBA) */
     ret = pci_request_region(pdev, 1, DRV_NAME);
     if (ret)
-        goto err_region0;
+        goto err_unmap_bar0;
 
     mdev->bar1 = pci_iomap(pdev, 1, 0);
     if (!mdev->bar1) {
@@ -198,7 +190,6 @@ static int minimal_probe(struct pci_dev *pdev,
      * 2. Makes it visible to the device
      * Returns the physical DMA address
      */
-
     mdev->rx_ring = dma_alloc_coherent(&pdev->dev,
             sizeof(struct rx_desc) * RX_RING_SIZE,
             &mdev->rx_ring_dma, GFP_KERNEL);
@@ -208,7 +199,7 @@ static int minimal_probe(struct pci_dev *pdev,
         &mdev->rx_ring_dma,
         sizeof(struct rx_desc) * RX_RING_SIZE);
 
-    /* Here are 16 empty buffers of 2048 bytes each */
+    /* Allocate 16 packet buffers of 2048 bytes each */
     for (i = 0; i < RX_RING_SIZE; i++) {
         mdev->rx_bufs[i] = dma_alloc_coherent(&pdev->dev,
                 RX_BUF_SIZE,
@@ -226,38 +217,60 @@ static int minimal_probe(struct pci_dev *pdev,
             &mdev->rx_bufs_dma[i]);
     }
 
-    /* Program device */
-    writel(mdev->rx_ring_dma, mdev->bar0 + REG_RX_RING_BASE);
-    writel(RX_RING_SIZE,     mdev->bar0 + REG_RX_RING_SIZE);
-    writel(RX_RING_SIZE-1,   mdev->bar0 + REG_RX_TAIL);
+    /* Program device: use writeq for the 64-bit ring base address */
+    writeq(mdev->rx_ring_dma,  mdev->bar0 + REG_RX_RING_BASE);
+    writel(RX_RING_SIZE,       mdev->bar0 + REG_RX_RING_SIZE);
+    writel(RX_RING_SIZE - 1,   mdev->bar0 + REG_RX_TAIL);
 
-    pr_info(DRV_NAME ": BAR0=%p BAR1=%p IRQ Vector Number=%d\n",
+    pr_info(DRV_NAME ": BAR0=%p BAR1=%p IRQ vectors=%d\n",
             mdev->bar0, mdev->bar1, mdev->nvec_irq);
+
+    /* Register netdev last, after all hardware resources are ready */
+    ret = register_netdev(ndev);
+    if (ret)
+        goto err_dma;
+
+    pr_info(DRV_NAME ": registered netdev %s\n", ndev->name);
 
     return 0;
 
+err_dma:
+    for (i = 0; i < RX_RING_SIZE; i++) {
+        if (mdev->rx_bufs[i])
+            dma_free_coherent(&pdev->dev, RX_BUF_SIZE,
+                              mdev->rx_bufs[i], mdev->rx_bufs_dma[i]);
+    }
+    if (mdev->rx_ring)
+        dma_free_coherent(&pdev->dev,
+                          sizeof(struct rx_desc) * RX_RING_SIZE,
+                          mdev->rx_ring, mdev->rx_ring_dma);
 err_region1:
+    if (mdev->bar1)
+        pci_iounmap(pdev, mdev->bar1);
     pci_release_region(pdev, 1);
-err_region0:
+err_unmap_bar0:
     pci_iounmap(pdev, mdev->bar0);
+err_region0:
     pci_release_region(pdev, 0);
 err_irq:
     pci_free_irq_vectors(pdev);
 err_disable:
     pci_disable_device(pdev);
+err_free_netdev:
+    free_netdev(ndev);
     return ret;
 }
 
 /* Remove */
 static void minimal_remove(struct pci_dev *pdev)
 {
-    struct minimal_dev *mdev = pci_get_drvdata(pdev);
+    struct net_device *ndev = pci_get_drvdata(pdev);
+    struct minimal_dev *mdev = netdev_priv(ndev);
     int i;
 
-    if (mdev->netdev) {
-        unregister_netdev(mdev->netdev);
-        free_netdev(mdev->netdev);
-    }
+    /* Unregister first so no new traffic arrives while we tear down. */
+    unregister_netdev(ndev);
+
     pr_info(DRV_NAME ": remove\n");
     for (i = 0; i < RX_RING_SIZE; i++) {
         if (mdev->rx_bufs[i])
@@ -282,6 +295,9 @@ static void minimal_remove(struct pci_dev *pdev)
 
     pci_free_irq_vectors(pdev);
     pci_disable_device(pdev);
+
+    /* free_netdev last: mdev is embedded via netdev_priv, freed with ndev. */
+    free_netdev(ndev);
 }
 
 /* PCI ID Table */
