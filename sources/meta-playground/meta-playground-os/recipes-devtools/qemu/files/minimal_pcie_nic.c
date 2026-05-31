@@ -164,15 +164,28 @@ typedef struct MinimalPCIeNICState {
     PCIDevice parent_obj;      /* Must be first */
     MemoryRegion mmio;         /* BAR0 Device Registers */
     MemoryRegion msix_bar;      /* BAR1: MSI-X table + PBA */
-    uint32_t regs[16];         /* Simulated device registers (64 bytes) */
+    /*
+     * regs[] is the backing store for BAR0 MMIO accesses that are not
+     * handled by dedicated fields (rx_ring_base, tx_ring_base, etc.).
+     * Expanded to 32 × 4 = 128 bytes to cover all register offsets
+     * including the TX registers that reach offset 0x40.
+     */
+    uint32_t regs[32];         /* Simulated device registers (128 bytes) */
 
     NICState *nic;
     NICConf conf;
 
-    uint64_t rx_ring_base;
-    uint32_t rx_ring_size;
-    uint32_t rx_head;
-    uint32_t rx_tail;
+    /* RX ring state */
+    uint64_t rx_ring_base;     /* guest-physical base of RX descriptor ring */
+    uint32_t rx_ring_size;     /* number of RX descriptors */
+    uint32_t rx_head;          /* device producer index (next desc to fill) */
+    uint32_t rx_tail;          /* driver consumer index (reclaimed up to here) */
+
+    /* TX ring state */
+    uint64_t tx_ring_base;     /* guest-physical base of TX descriptor ring */
+    uint32_t tx_ring_size;     /* number of TX descriptors */
+    uint32_t tx_head;          /* device consumer index (next desc to process) */
+    uint32_t tx_tail;          /* driver producer index (last desc written) */
 } MinimalPCIeNICState;
 
 /*
@@ -213,11 +226,101 @@ struct rx_desc {
 /* Descriptor flag: device sets this bit after DMA-ing a packet into addr. */
 #define RX_DONE 1
 
+/*
+ * tx_desc — TX descriptor layout shared between guest driver and device.
+ *
+ * The guest driver fills one entry per outbound packet and kicks the device
+ * by writing the updated tail index to REG_TX_TAIL.
+ *
+ * addr  — guest-physical address of the packet buffer filled by the driver.
+ * len   — number of bytes in the packet.
+ * flags — TX_READY set by driver (packet ready to send);
+ *         TX_DONE  set by device after the packet has been queued to the wire.
+ */
+struct tx_desc {
+    uint64_t addr;
+    uint16_t len;
+    uint16_t flags;
+};
+
+#define TX_READY  1   /* driver sets: descriptor holds a packet to transmit */
+#define TX_DONE   2   /* device sets: packet has been sent to the wire */
+
+/* BAR0 TX register offsets */
+#define REG_TX_RING_BASE   0x30   /* 64-bit guest-physical address of TX ring */
+#define REG_TX_RING_SIZE   0x38   /* number of TX descriptors */
+#define REG_TX_TAIL        0x3C   /* driver writes new tail to kick device */
+#define REG_TX_HEAD        0x40   /* driver reads to discover sent descs */
+
 /* Forward declaration — defined after minimal_raise_irq() below. */
 /* Callback; packet received from host (eg. tap or user networking) */
 static ssize_t minimal_receive_packet(NetClientState *nc,
                                       const uint8_t *buf,
                                       size_t size);
+
+/*
+ * minimal_tx_kick — process outbound TX descriptors queued by the driver.
+ *
+ * Called when the guest driver writes REG_TX_TAIL to signal that new TX
+ * descriptors have been filled.  We drain all pending descriptors from
+ * tx_head up to (but not including) the new tx_tail.
+ *
+ * For each ready descriptor:
+ *  1. pci_dma_read() reads the descriptor struct from guest memory.
+ *  2. pci_dma_read() reads the packet bytes from the guest buffer.
+ *  3. qemu_send_packet() delivers the frame to the host network backend.
+ *  4. The descriptor is marked TX_DONE and written back.
+ *  5. tx_head advances.
+ *
+ * A 2 KB stack buffer is sufficient for standard Ethernet frames (max 1522 B).
+ */
+static void minimal_tx_kick(MinimalPCIeNICState *s)
+{
+    uint8_t pktbuf[2048];
+
+    if (!s->tx_ring_base || !s->tx_ring_size)
+        return;
+
+    while (s->tx_head != s->tx_tail) {
+        struct tx_desc desc;
+        uint64_t desc_addr = s->tx_ring_base + s->tx_head * sizeof(desc);
+
+        pci_dma_read(&s->parent_obj, desc_addr, &desc, sizeof(desc));
+
+        if (!(desc.flags & TX_READY))
+            break;  /* descriptor not filled yet — stop */
+
+        uint16_t len = desc.len < sizeof(pktbuf) ? desc.len : sizeof(pktbuf);
+        pci_dma_read(&s->parent_obj, desc.addr, pktbuf, len);
+
+        qemu_send_packet(qemu_get_queue(s->nic), pktbuf, len);
+
+        desc.flags = TX_DONE;
+        pci_dma_write(&s->parent_obj, desc_addr, &desc, sizeof(desc));
+
+        s->tx_head = (s->tx_head + 1) % s->tx_ring_size;
+    }
+}
+
+/*
+ * minimal_can_receive — tell QEMU whether this device can accept an inbound
+ * packet right now.
+ *
+ * Returns non-zero (true) only after the guest driver has programmed the RX
+ * ring, preventing QEMU from dropping frames on the floor before the driver
+ * is ready to receive.
+ */
+static int minimal_can_receive(NetClientState *nc)
+{
+    MinimalPCIeNICState *s = qemu_get_nic_opaque(nc);
+    int ready = s->rx_ring_size > 0 && s->rx_ring_base != 0;
+    if (!ready) {
+        printf("minimal_pcie_nic: [TRACE] can_receive=NO "
+               "(rx_ring_base=0x%" PRIx64 " rx_ring_size=%u)\n",
+               s->rx_ring_base, s->rx_ring_size);
+    }
+    return ready;
+}
 
 /*
  * minimal_raise_irq — deliver an interrupt to the guest.
@@ -245,18 +348,23 @@ static void minimal_raise_irq(MinimalPCIeNICState *s, uint32_t vector)
 #ifdef MSIX_ENABLE
     if (msix_enabled(pdev)) {
         if (vector < msix_nr_vectors_allocated(pdev)) {
+            printf("minimal_pcie_nic: [TRACE] MSI-X notify vector=%u\n", vector);
             msix_notify(pdev, vector);
         } else {
-            printf("invalid MSI-X vector %u\n", vector);
+            printf("minimal_pcie_nic: [TRACE] ERROR invalid MSI-X vector %u "
+                   "(allocated=%u)\n", vector, msix_nr_vectors_allocated(pdev));
         }
         return;
     }
+    printf("minimal_pcie_nic: [TRACE] ERROR MSI-X not enabled by guest\n");
 #else
     /* Fallback to MSI */
     if (msi_enabled(pdev)) {
+        printf("minimal_pcie_nic: [TRACE] MSI notify vector=%u\n", vector);
         msi_notify(pdev, vector);
         return;
     }
+    printf("minimal_pcie_nic: [TRACE] ERROR MSI not enabled by guest\n");
 #endif
 
     printf("interrupts not enabled\n");
@@ -343,6 +451,17 @@ static uint64_t minimal_mmio_read(void *opaque, hwaddr addr, unsigned size)
     MinimalPCIeNICState *s = opaque;
     uint64_t val = 0;
 
+    /*
+     * Special-case dynamic registers that live in dedicated fields rather
+     * than in the flat regs[] array.  Return the current hardware-side value
+     * directly so the driver always sees the up-to-date index.
+     */
+    if (addr == REG_RX_HEAD && size == 4)
+        return s->rx_head;
+
+    if (addr == REG_TX_HEAD && size == 4)
+        return s->tx_head;
+
     /* Bounds check: guest may read beyond regs[] */
     if (addr + size > sizeof(s->regs)) {
         printf("minimal_pcie_nic: MMIO read out-of-bounds addr=0x%#" PRIx64 " size=%u\n",
@@ -412,18 +531,51 @@ static void minimal_mmio_write(void *opaque,
     if (addr == REG_RX_RING_BASE) {
         /* Guest driver sets the DMA base address of the RX descriptor ring. */
         s->rx_ring_base = data;
+        printf("minimal_pcie_nic: [TRACE] RX ring base set: 0x%" PRIx64 "\n", data);
         return;
     }
 
     if (addr == REG_RX_RING_SIZE) {
         /* Guest driver sets how many descriptors are in the ring. */
         s->rx_ring_size = data;
+        printf("minimal_pcie_nic: [TRACE] RX ring size set: %u\n", (uint32_t)data);
+        /*
+         * Ring is now ready. If QEMU paused reading from the tap backend
+         * because can_receive() returned 0 earlier, flush the queue to
+         * re-enable the tap read handler and deliver any buffered packets.
+         */
+        if (s->rx_ring_base && s->rx_ring_size) {
+            printf("minimal_pcie_nic: [TRACE] RX ring ready — flushing queued packets\n");
+            qemu_flush_queued_packets(qemu_get_queue(s->nic));
+        }
         return;
     }
 
     if (addr == REG_RX_TAIL) {
         /* Guest driver reclaims processed descriptors up to this index. */
         s->rx_tail = data;
+        return;
+    }
+
+    if (addr == REG_TX_RING_BASE) {
+        /* Guest driver sets the DMA base address of the TX descriptor ring. */
+        s->tx_ring_base = data;
+        return;
+    }
+
+    if (addr == REG_TX_RING_SIZE) {
+        /* Guest driver sets how many TX descriptors are in the ring. */
+        s->tx_ring_size = data;
+        return;
+    }
+
+    if (addr == REG_TX_TAIL) {
+        /*
+         * Guest driver has filled new TX descriptors and advances the tail.
+         * Process all pending descriptors up to the new tail index.
+         */
+        s->tx_tail = (uint32_t)data;
+        minimal_tx_kick(s);
         return;
     }
 
@@ -535,9 +687,15 @@ static ssize_t minimal_receive_packet(NetClientState *nc,
     struct rx_desc desc;
     uint64_t desc_addr;
 
+    printf("minimal_pcie_nic: [TRACE] receive_packet size=%zu "
+           "rx_ring_base=0x%" PRIx64 " rx_ring_size=%u rx_head=%u\n",
+           size, s->rx_ring_base, s->rx_ring_size, s->rx_head);
+
     /* Step 1: Drop packet if driver hasn't initialized the RX ring yet. */
-    if (!s->rx_ring_size || !s->rx_ring_base)
+    if (!s->rx_ring_size || !s->rx_ring_base) {
+        printf("minimal_pcie_nic: [TRACE] DROP: ring not ready\n");
         return 0;   /* driver not ready */
+    }
 
     /* Step 2: Locate the next RX descriptor in the ring. */
     desc_addr = s->rx_ring_base +
@@ -547,13 +705,23 @@ static ssize_t minimal_receive_packet(NetClientState *nc,
     pci_dma_read(&s->parent_obj,
                  desc_addr, &desc, sizeof(desc));
 
+    printf("minimal_pcie_nic: [TRACE] desc[%u] addr=0x%" PRIx64
+           " len=%u flags=0x%x\n",
+           s->rx_head, desc.addr, desc.len, desc.flags);
+
     /* Drop packet if the driver has not reclaimed this descriptor yet. */
-    if (desc.flags & RX_DONE)
+    if (desc.flags & RX_DONE) {
+        printf("minimal_pcie_nic: [TRACE] DROP: ring full (desc[%u] still RX_DONE)\n",
+               s->rx_head);
         return 0;   /* ring full — driver is behind */
+    }
 
     /* Step 4: DMA packet payload into the guest buffer the driver prepared. */
     pci_dma_write(&s->parent_obj,
                   desc.addr, buf, size);
+
+    printf("minimal_pcie_nic: [TRACE] DMA write %zu bytes → guest buf 0x%" PRIx64 "\n",
+           size, desc.addr);
 
     /* Step 5: Mark descriptor complete so the driver knows it's ready. */
     desc.len = size;
@@ -566,11 +734,13 @@ static ssize_t minimal_receive_packet(NetClientState *nc,
     /* Step 6: Advance the ring head (wrap around at rx_ring_size). */
     s->rx_head = (s->rx_head + 1) % s->rx_ring_size;
 
+    printf("minimal_pcie_nic: [TRACE] desc marked RX_DONE, rx_head now %u, firing IRQ\n",
+           s->rx_head);
+
     /* Step 7: Interrupt the guest driver via MSI-X vector 0. */
     minimal_raise_irq(s, 0);
-#ifdef DEBUG
-    printf("minimal_pcie_nic: RX packet delivered, MSI-X vector 0 fired\n");
-#endif
+
+    printf("minimal_pcie_nic: [TRACE] RX complete — %zu bytes delivered\n", size);
 
     return size;
 }
@@ -588,9 +758,10 @@ static ssize_t minimal_receive_packet(NetClientState *nc,
  * frame, QEMU calls net_ops.receive().
  */
 static NetClientInfo net_ops = {
-    .type = NET_CLIENT_DRIVER_NIC,
-    .size = sizeof(NICState),
-    .receive = minimal_receive_packet,
+    .type        = NET_CLIENT_DRIVER_NIC,
+    .size        = sizeof(NICState),
+    .can_receive = minimal_can_receive,
+    .receive     = minimal_receive_packet,
 };
 
 /*

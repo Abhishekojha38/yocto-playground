@@ -15,6 +15,19 @@
 
 #define MSIX_ENABLE
 
+/*
+ * Compile-time trace toggle.
+ * Controlled via EXTRA_CFLAGS in the Yocto recipe (-DTRACE_PCIE_NIC).
+ * Comment out or remove from the recipe to silence all [TRACE] messages
+ * once the data path is confirmed working.
+ */
+#ifdef TRACE_PCIE_NIC
+#define tdbg(ndev, fmt, ...) \
+    netdev_info((ndev), "[TRACE] " fmt, ##__VA_ARGS__)
+#else
+#define tdbg(ndev, fmt, ...) do {} while (0)
+#endif
+
 /* Ring Configurations */
 #define REG_RX_RING_BASE   0x10
 #define REG_RX_RING_SIZE   0x18
@@ -25,11 +38,27 @@
 #define RX_BUF_SIZE         2048
 #define RX_DONE             1
 
+#define REG_TX_RING_BASE   0x30
+#define REG_TX_RING_SIZE   0x38
+#define REG_TX_TAIL        0x3C
+#define REG_TX_HEAD        0x40
+
+#define TX_RING_SIZE        16
+#define TX_BUF_SIZE         2048
+#define TX_READY            1
+#define TX_DONE             2
+
 /* QEMU NIC reads and writes exactly this layout using PCIe DMA */
 struct rx_desc {
     u64 addr;   // where NIC must DMA the packet
     u16 len;    // length written by NIC
     u16 flags;  // DONE bit from NIC
+};
+
+struct tx_desc {
+    u64 addr;   // guest-physical address of the outbound packet buffer
+    u16 len;    // number of bytes to transmit
+    u16 flags;  // TX_READY set by driver; TX_DONE set by device
 };
 
 struct minimal_dev {
@@ -44,24 +73,61 @@ struct minimal_dev {
 
     void *rx_bufs[RX_RING_SIZE];    // Actual packet buffers linux will use to access data
     dma_addr_t rx_bufs_dma[RX_RING_SIZE];   // Physical addresses of those buffers
+    u32 rx_clean;               // SW consumer index (next descriptor to process)
+    struct napi_struct napi;    // NAPI instance for RX bottom-half processing
+
+    struct tx_desc *tx_ring;    // Virtual address of TX descriptor ring
+    dma_addr_t tx_ring_dma;     // Physical address QEMU NIC uses to access TX ring
+
+    void *tx_bufs[TX_RING_SIZE];      // TX packet buffers
+    dma_addr_t tx_bufs_dma[TX_RING_SIZE];
+    u32 tx_head;                // SW copy: next descriptor to reclaim after TX_DONE
+    u32 tx_tail;                // SW copy: next slot to fill
 };
 
 static int minimal_open(struct net_device *ndev)
 {
+    struct minimal_dev *mdev = netdev_priv(ndev);
+    napi_enable(&mdev->napi);
     netif_start_queue(ndev);
     return 0;
 }
 
 static int minimal_stop(struct net_device *ndev)
 {
+    struct minimal_dev *mdev = netdev_priv(ndev);
     netif_stop_queue(ndev);
+    napi_disable(&mdev->napi);
     return 0;
 }
 
 static netdev_tx_t minimal_start_xmit(struct sk_buff *skb,
                                       struct net_device *ndev)
 {
-    /* Later you will DMA this into QEMU */
+    struct minimal_dev *mdev = netdev_priv(ndev);
+    u32 slot = mdev->tx_tail;
+
+    if (skb->len > TX_BUF_SIZE) {
+        dev_kfree_skb(skb);
+        ndev->stats.tx_dropped++;
+        return NETDEV_TX_OK;
+    }
+
+    /* Copy payload into the pre-allocated DMA-coherent buffer for this slot. */
+    memcpy(mdev->tx_bufs[slot], skb->data, skb->len);
+
+    /* Fill the TX descriptor — addr and len are already cached from probe. */
+    mdev->tx_ring[slot].addr  = mdev->tx_bufs_dma[slot];
+    mdev->tx_ring[slot].len   = skb->len;
+    mdev->tx_ring[slot].flags = TX_READY;
+
+    /* Advance the SW tail and kick the device by writing the new index. */
+    mdev->tx_tail = (mdev->tx_tail + 1) % TX_RING_SIZE;
+    writel(mdev->tx_tail, mdev->bar0 + REG_TX_TAIL);
+
+    ndev->stats.tx_packets++;
+    ndev->stats.tx_bytes += skb->len;
+
     dev_kfree_skb(skb);
     return NETDEV_TX_OK;
 }
@@ -75,19 +141,93 @@ static const struct net_device_ops minimal_netdev_ops = {
 static irqreturn_t minimal_irq_handler(int irq, void *dev_id)
 {
     struct minimal_dev *mdev = dev_id;
-    u32 head = readl(mdev->bar0 + REG_RX_HEAD);
-    u32 tail = readl(mdev->bar0 + REG_RX_TAIL);
-    u32 i = tail;
-
-    /* Walk only newly-completed descriptors from tail up to head. */
-    while (i != head) {
-        if (mdev->rx_ring[i].flags & RX_DONE) {
-            pr_info("minimal_pcie_nic: RX[%u] len=%u\n", i, mdev->rx_ring[i].len);
-            mdev->rx_ring[i].flags = 0;
-        }
-        i = (i + 1) % RX_RING_SIZE;
-    }
+    tdbg(mdev->netdev, "IRQ fired (irq=%d), scheduling NAPI\n", irq);
+    /*
+     * Offload RX processing to the NAPI poll function (bottom-half).
+     * napi_schedule_irqoff() is safe here because we are already in
+     * hard-IRQ context with local IRQs disabled.
+     */
+    napi_schedule_irqoff(&mdev->napi);
     return IRQ_HANDLED;
+}
+
+/*
+ * minimal_napi_poll — NAPI bottom-half: drain the RX ring up to @budget frames.
+ *
+ * Called from softirq context after the ISR schedules us.  We process up to
+ * @budget completed RX descriptors per call so we yield the CPU fairly between
+ * multiple devices and other softirq work.
+ *
+ * Per descriptor:
+ *  1. Check RX_DONE flag; stop if not yet filled by the device.
+ *  2. Allocate an skb and copy the packet bytes from the DMA buffer.
+ *  3. Let eth_type_trans() detect the L3 protocol and strip the Ethernet header.
+ *  4. Pass to napi_gro_receive() for GRO coalescing before stack delivery.
+ *  5. Re-arm the descriptor (clear flags, restore full buffer length) so QEMU
+ *     can reuse the slot for the next incoming packet.
+ *
+ * After draining (or hitting budget), write rx_clean to REG_RX_TAIL so the
+ * QEMU device knows which descriptors are available again.
+ *
+ * If work_done < budget we have drained the ring; call napi_complete_done()
+ * to re-arm interrupts and exit polling mode.
+ */
+static int minimal_napi_poll(struct napi_struct *napi, int budget)
+{
+    struct minimal_dev *mdev = container_of(napi, struct minimal_dev, napi);
+    u32 head = readl(mdev->bar0 + REG_RX_HEAD);
+    u32 i    = mdev->rx_clean;
+    int work_done = 0;
+
+    tdbg(mdev->netdev, "NAPI poll: rx_clean=%u rx_head=%u budget=%d\n",
+         i, head, budget);
+
+    while (i != head && work_done < budget) {
+        struct rx_desc *desc = &mdev->rx_ring[i];
+
+        tdbg(mdev->netdev, "  desc[%u] flags=0x%x len=%u\n",
+             i, desc->flags, desc->len);
+
+        if (!(desc->flags & RX_DONE)) {
+            tdbg(mdev->netdev, "  desc[%u] not done yet — stop\n", i);
+            break;
+        }
+
+        u16 len = desc->len;
+        struct sk_buff *skb = netdev_alloc_skb_ip_align(mdev->netdev, len);
+        if (likely(skb)) {
+            memcpy(skb_put(skb, len), mdev->rx_bufs[i], len);
+            skb->protocol = eth_type_trans(skb, mdev->netdev);
+            mdev->netdev->stats.rx_packets++;
+            mdev->netdev->stats.rx_bytes += len;
+            tdbg(mdev->netdev, "  desc[%u] → netstack len=%u proto=0x%04x\n",
+                 i, len, ntohs(skb->protocol));
+            napi_gro_receive(napi, skb);
+        } else {
+            netdev_warn(mdev->netdev, "  desc[%u] skb alloc failed, dropping\n", i);
+            mdev->netdev->stats.rx_dropped++;
+        }
+
+        /* Re-arm: clear the done flag and restore the full buffer length. */
+        desc->len   = RX_BUF_SIZE;
+        desc->flags = 0;
+
+        i = (i + 1) % RX_RING_SIZE;
+        work_done++;
+    }
+
+    /* Persist the updated consumer pointer and inform the device. */
+    mdev->rx_clean = i;
+    writel(mdev->rx_clean, mdev->bar0 + REG_RX_TAIL);
+
+    tdbg(mdev->netdev, "NAPI poll done: work_done=%d rx_clean now %u\n",
+         work_done, mdev->rx_clean);
+
+    /* If we processed fewer than budget packets the ring is drained. */
+    if (work_done < budget)
+        napi_complete_done(napi, work_done);
+
+    return work_done;
 }
 
 static int minimal_probe(struct pci_dev *pdev,
@@ -107,6 +247,16 @@ static int minimal_probe(struct pci_dev *pdev,
     mdev->pdev = pdev;
     mdev->netdev = ndev;
     pci_set_drvdata(pdev, ndev);  /* store ndev; mdev = netdev_priv(ndev) */
+
+    /*
+     * Register NAPI immediately after allocating mdev — before any hardware
+     * is touched.  qemu_flush_queued_packets() (called when the driver writes
+     * REG_RX_RING_SIZE) can cause QEMU to fire an MSI-X interrupt synchronously,
+     * which schedules NAPI.  If napi->poll is still NULL at that point the
+     * kernel crashes with pc=0x0.  Registering early ensures the poll pointer
+     * is valid before any interrupt can arrive.
+     */
+    netif_napi_add(ndev, &mdev->napi, minimal_napi_poll);
 
     ndev->netdev_ops = &minimal_netdev_ops;
     ndev->min_mtu = 68;
@@ -220,7 +370,44 @@ static int minimal_probe(struct pci_dev *pdev,
     /* Program device: use writeq for the 64-bit ring base address */
     writeq(mdev->rx_ring_dma,  mdev->bar0 + REG_RX_RING_BASE);
     writel(RX_RING_SIZE,       mdev->bar0 + REG_RX_RING_SIZE);
-    writel(RX_RING_SIZE - 1,   mdev->bar0 + REG_RX_TAIL);
+    writel(0,                  mdev->bar0 + REG_RX_TAIL);   /* driver starts consuming from index 0 */
+    mdev->rx_clean = 0;
+
+    pr_info(DRV_NAME ": RX ring registered: dma=0x%llx size=%u\n",
+            (unsigned long long)mdev->rx_ring_dma, RX_RING_SIZE);
+
+    /* Allocate TX ring */
+    mdev->tx_ring = dma_alloc_coherent(&pdev->dev,
+            sizeof(struct tx_desc) * TX_RING_SIZE,
+            &mdev->tx_ring_dma, GFP_KERNEL);
+    if (!mdev->tx_ring) {
+        ret = -ENOMEM;
+        goto err_dma;
+    }
+
+    for (i = 0; i < TX_RING_SIZE; i++) {
+        mdev->tx_bufs[i] = dma_alloc_coherent(&pdev->dev,
+                TX_BUF_SIZE,
+                &mdev->tx_bufs_dma[i],
+                GFP_KERNEL);
+        if (!mdev->tx_bufs[i]) {
+            ret = -ENOMEM;
+            goto err_dma;
+        }
+        mdev->tx_ring[i].addr  = mdev->tx_bufs_dma[i];
+        mdev->tx_ring[i].len   = 0;
+        mdev->tx_ring[i].flags = 0;
+    }
+
+    mdev->tx_head = 0;
+    mdev->tx_tail = 0;
+
+    /* Tell device the TX ring location and size */
+    writeq(mdev->tx_ring_dma, mdev->bar0 + REG_TX_RING_BASE);
+    writel(TX_RING_SIZE,       mdev->bar0 + REG_TX_RING_SIZE);
+
+    pr_info(DRV_NAME ": TX ring registered: dma=0x%llx size=%u\n",
+            (unsigned long long)mdev->tx_ring_dma, TX_RING_SIZE);
 
     pr_info(DRV_NAME ": BAR0=%p BAR1=%p IRQ vectors=%d\n",
             mdev->bar0, mdev->bar1, mdev->nvec_irq);
@@ -235,6 +422,16 @@ static int minimal_probe(struct pci_dev *pdev,
     return 0;
 
 err_dma:
+    netif_napi_del(&mdev->napi);
+    for (i = 0; i < TX_RING_SIZE; i++) {
+        if (mdev->tx_bufs[i])
+            dma_free_coherent(&pdev->dev, TX_BUF_SIZE,
+                              mdev->tx_bufs[i], mdev->tx_bufs_dma[i]);
+    }
+    if (mdev->tx_ring)
+        dma_free_coherent(&pdev->dev,
+                          sizeof(struct tx_desc) * TX_RING_SIZE,
+                          mdev->tx_ring, mdev->tx_ring_dma);
     for (i = 0; i < RX_RING_SIZE; i++) {
         if (mdev->rx_bufs[i])
             dma_free_coherent(&pdev->dev, RX_BUF_SIZE,
@@ -270,8 +467,22 @@ static void minimal_remove(struct pci_dev *pdev)
 
     /* Unregister first so no new traffic arrives while we tear down. */
     unregister_netdev(ndev);
+    netif_napi_del(&mdev->napi);
 
     pr_info(DRV_NAME ": remove\n");
+
+    for (i = 0; i < TX_RING_SIZE; i++) {
+        if (mdev->tx_bufs[i])
+            dma_free_coherent(&pdev->dev, TX_BUF_SIZE,
+                              mdev->tx_bufs[i],
+                              mdev->tx_bufs_dma[i]);
+    }
+    if (mdev->tx_ring)
+        dma_free_coherent(&pdev->dev,
+                          sizeof(struct tx_desc) * TX_RING_SIZE,
+                          mdev->tx_ring,
+                          mdev->tx_ring_dma);
+
     for (i = 0; i < RX_RING_SIZE; i++) {
         if (mdev->rx_bufs[i])
             dma_free_coherent(&pdev->dev, RX_BUF_SIZE,
