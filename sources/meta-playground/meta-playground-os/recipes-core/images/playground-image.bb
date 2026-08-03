@@ -3,9 +3,12 @@ LICENSE = "MIT"
 
 require recipes-core/images/core-image-minimal.bb
 
+INHIBIT_PACKAGE_STRIP = "1"
+
 IMAGE_FEATURES += "\
     ssh-server-dropbear \
-    tools-debug"
+    tools-debug \
+    tools-profile"
 
 # Additional packages for Ollama
 IMAGE_INSTALL:append = " \
@@ -29,6 +32,7 @@ IMAGE_INSTALL:append = " \
 
 # Optional: Add tools for debugging and monitoring
 IMAGE_INSTALL:append = " \
+    iperf3 \
     strace \
     lsof \
     wget \
