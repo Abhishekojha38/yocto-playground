@@ -129,9 +129,6 @@ static int minimal_setup_rx_resources(struct minimal_dev *mdev)
 
     descs = rx->desc;
 
-    //pr_info("RX ring VA=%p  DMA=%pad  count=%u\n",
-    //    rx->desc, &mdev->rx_ring_dma, rx->count);
-
     /* Allocate one packet buffer of RX_BUF_SIZE bytes per descriptor */
     for (i = 0; i < rx->count; i++) {
         rx->rx_bufs[i].buf = dma_alloc_coherent(&pdev->dev,
@@ -144,14 +141,7 @@ static int minimal_setup_rx_resources(struct minimal_dev *mdev)
         descs[i].addr  = rx->rx_bufs[i].dma;
         descs[i].len   = RX_BUF_SIZE;
         descs[i].flags = 0;
-#if 0
-        pr_info("RX[%02d] desc_va=%p  buf_va=%p  buf_dma=%pad\n",
-            i,
-            &descs[i],
-            rx->rx_bufs[i].buf,
-            &rx->rx_bufs[i].dma);
-#endif
-            }
+    }
 
     /* Program device: use writeq for the 64-bit ring base address */
     writeq(mdev->rx_ring_dma,  mdev->bar0 + REG_RX_RING_BASE);
@@ -159,9 +149,6 @@ static int minimal_setup_rx_resources(struct minimal_dev *mdev)
     writel(0,                  mdev->bar0 + REG_RX_TAIL);   /* driver starts consuming from index 0 */
     rx->head = 0;
     rx->tail = 0;
-
-    //pr_info(DRV_NAME ": RX ring registered: dma=0x%llx count=%u\n",
-    //        (unsigned long long)mdev->rx_ring_dma, rx->count);
 
     return 0;
 
@@ -256,9 +243,6 @@ static int minimal_setup_tx_resources(struct minimal_dev *mdev)
     /* Tell device the TX ring location and size */
     writeq(mdev->tx_ring_dma, mdev->bar0 + REG_TX_RING_BASE);
     writel(tx->count,          mdev->bar0 + REG_TX_RING_SIZE);
-
-    //pr_info(DRV_NAME ": TX ring registered: dma=0x%llx count=%u\n",
-    //        (unsigned long long)mdev->tx_ring_dma, tx->count);
 
     return 0;
 
@@ -400,7 +384,6 @@ static const struct net_device_ops minimal_netdev_ops = {
 static irqreturn_t minimal_irq_handler(int irq, void *dev_id)
 {
     struct minimal_dev *mdev = dev_id;
-    //pr_info(DRV_NAME ": [TRACE] IRQ fired (irq=%d), scheduling NAPI\n", irq);
     /*
      * Offload RX processing to the NAPI poll function (bottom-half).
      * napi_schedule_irqoff() is safe here because we are already in
@@ -442,17 +425,11 @@ static int minimal_napi_poll(struct napi_struct *napi, int budget)
 
     rx->head = head;
 
-    //pr_info(DRV_NAME ": [TRACE] NAPI poll: rx_tail=%u rx_head=%u budget=%d\n",
-    //     i, head, budget);
-
     while (i != head && work_done < budget) {
         struct rx_desc *desc = &descs[i];
 
-        //pr_info(DRV_NAME ": [TRACE]   desc[%u] flags=0x%x len=%u\n",
-        //     i, desc->flags, desc->len);
-
         if (!(desc->flags & RX_DONE)) {
-            //pr_info(DRV_NAME ": [TRACE]   desc[%u] not done yet — stop\n", i);
+            pr_err(DRV_NAME ": [TRACE]   desc[%u] not done yet — stop\n", i);
             break;
         }
 
@@ -463,8 +440,6 @@ static int minimal_napi_poll(struct napi_struct *napi, int budget)
             skb->protocol = eth_type_trans(skb, mdev->netdev);
             mdev->netdev->stats.rx_packets++;
             mdev->netdev->stats.rx_bytes += len;
-            //pr_info(DRV_NAME ": [TRACE]   desc[%u] → netstack len=%u proto=0x%04x\n",
-            //     i, len, ntohs(skb->protocol));
             napi_gro_receive(napi, skb);
         } else {
             netdev_warn(mdev->netdev, "  desc[%u] skb alloc failed, dropping\n", i);
@@ -482,9 +457,6 @@ static int minimal_napi_poll(struct napi_struct *napi, int budget)
     /* Persist the updated consumer pointer and inform the device. */
     rx->tail = i;
     writel(rx->tail, mdev->bar0 + REG_RX_TAIL);
-
-    //pr_info(DRV_NAME ": [TRACE] NAPI poll done: work_done=%d rx_tail now %u\n",
-    //     work_done, rx->tail);
 
     /* If we processed fewer than budget packets the ring is drained. */
     if (work_done < budget)
@@ -600,9 +572,6 @@ static int minimal_probe(struct pci_dev *pdev,
         ret = -ENOMEM;
         goto err_region1;
     }
-
-    //pr_info(DRV_NAME ": BAR0=%p BAR1=%p IRQ vectors=%d\n",
-    //        mdev->bar0, mdev->bar1, mdev->nvec_irq);
 
     /*
      * Register netdev last, after the BAR mappings and IRQs are ready.
