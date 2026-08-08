@@ -558,6 +558,17 @@ static void minimal_mmio_write(void *opaque,
     if (addr == REG_RX_TAIL) {
         /* Guest driver reclaims processed descriptors up to this index. */
         s->rx_tail = data;
+        /*
+         * The driver just freed RX descriptors (cleared RX_DONE).  If we
+         * previously returned 0 from minimal_receive_packet() because the ring
+         * was full, QEMU disabled RX delivery to this NIC and will not call
+         * .receive again until we flush.  Now that space is available, flush
+         * the queued packets to re-enable delivery — otherwise a single
+         * ring-full drop stalls RX permanently.
+         */
+        if (s->rx_ring_base && s->rx_ring_size) {
+            qemu_flush_queued_packets(qemu_get_queue(s->nic));
+        }
         return;
     }
 

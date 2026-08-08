@@ -10,3 +10,6 @@
 [submodule "sources/meta-ollama-cpp"]
 	path = sources/meta-ollama-cpp
 	url = https://github.com/Abhishekojha38/meta-ollama-cpp.git
+[submodule "sources/meta-llama-cpp"]
+	path = sources/meta-llama-cpp
+	url = https://github.com/Abhishekojha38/meta-llama-cpp.git
