@@ -46,8 +46,8 @@ struct tx_buff {
 };
 
 struct rx_buff {
-    void *buf;   // virtual address of the packet buffer
-    dma_addr_t dma;  // physical address for DMA
+    struct sk_buff *skb;   // skb whose data buffer the device DMAs into
+    dma_addr_t dma;        // streaming DMA mapping of skb->data (device-visible)
 };
 struct rx_desc {
     dma_addr_t addr;   // where NIC must DMA the packet
@@ -95,12 +95,55 @@ struct minimal_dev {
 };
 
 /*
+ * minimal_alloc_rx_skb — allocate an RX skb and DMA-map it into descriptor @i.
+ *
+ * Zero-copy RX: instead of handing the device a fixed coherent buffer and later
+ * memcpy()ing into a freshly allocated skb, we allocate the skb up front, take a
+ * streaming DMA_FROM_DEVICE mapping of its data area, and point the descriptor
+ * straight at that mapping.  The device then DMAs the incoming frame directly
+ * into skb->data, so the NAPI poll can pass the skb up the stack without any
+ * copy.
+ *
+ * On success rx->rx_bufs[i] owns the skb + mapping and descs[i] points the
+ * device at the mapping.  Returns 0, or -ENOMEM on allocation/mapping failure
+ * (in which case the slot is left empty for the caller to handle).
+ */
+static int minimal_alloc_rx_skb(struct minimal_dev *mdev, int i)
+{
+    struct pci_dev *pdev = mdev->pdev;
+    struct rx_ring *rx = &mdev->rx_ring;
+    struct rx_desc *descs = rx->desc;
+    struct sk_buff *skb;
+    dma_addr_t dma;
+
+    skb = netdev_alloc_skb_ip_align(mdev->netdev, RX_BUF_SIZE);
+    if (!skb)
+        return -ENOMEM;
+
+    dma = dma_map_single(&pdev->dev, skb->data, RX_BUF_SIZE,
+                         DMA_FROM_DEVICE);
+    if (dma_mapping_error(&pdev->dev, dma)) {
+        dev_kfree_skb_any(skb);
+        return -ENOMEM;
+    }
+
+    rx->rx_bufs[i].skb = skb;
+    rx->rx_bufs[i].dma = dma;
+
+    descs[i].addr  = dma;
+    descs[i].len   = RX_BUF_SIZE;
+    descs[i].flags = 0;
+
+    return 0;
+}
+
+/*
  * minimal_setup_rx_resources — allocate and program the RX descriptor ring.
  *
- * Allocates the coherent RX ring plus one DMA buffer per descriptor, wires the
- * buffer addresses into the ring, then hands the ring base/size to the device
- * and resets the software consumer index.  Called from minimal_open() so the
- * data-path resources only exist while the interface is administratively up.
+ * Allocates the coherent RX ring plus one DMA-mapped skb per descriptor, wires
+ * the mapping addresses into the ring, then hands the ring base/size to the
+ * device and resets the software consumer index.  Called from minimal_open() so
+ * the data-path resources only exist while the interface is administratively up.
  */
 static int minimal_setup_rx_resources(struct minimal_dev *mdev)
 {
@@ -129,18 +172,10 @@ static int minimal_setup_rx_resources(struct minimal_dev *mdev)
 
     descs = rx->desc;
 
-    /* Allocate one packet buffer of RX_BUF_SIZE bytes per descriptor */
+    /* Allocate one DMA-mapped skb per descriptor for direct device DMA. */
     for (i = 0; i < rx->count; i++) {
-        rx->rx_bufs[i].buf = dma_alloc_coherent(&pdev->dev,
-                RX_BUF_SIZE,
-                &rx->rx_bufs[i].dma,
-                GFP_KERNEL);
-        if (!rx->rx_bufs[i].buf)
+        if (minimal_alloc_rx_skb(mdev, i))
             goto err_free_bufs;
-
-        descs[i].addr  = rx->rx_bufs[i].dma;
-        descs[i].len   = RX_BUF_SIZE;
-        descs[i].flags = 0;
     }
 
     /* Program device: use writeq for the 64-bit ring base address */
@@ -154,9 +189,10 @@ static int minimal_setup_rx_resources(struct minimal_dev *mdev)
 
 err_free_bufs:
     while (--i >= 0) {
-        dma_free_coherent(&pdev->dev, RX_BUF_SIZE,
-                          rx->rx_bufs[i].buf, rx->rx_bufs[i].dma);
-        rx->rx_bufs[i].buf = NULL;
+        dma_unmap_single(&pdev->dev, rx->rx_bufs[i].dma,
+                         RX_BUF_SIZE, DMA_FROM_DEVICE);
+        dev_kfree_skb_any(rx->rx_bufs[i].skb);
+        rx->rx_bufs[i].skb = NULL;
     }
     dma_free_coherent(&pdev->dev,
                       sizeof(struct rx_desc) * rx->count,
@@ -177,9 +213,12 @@ static void minimal_free_rx_resources(struct minimal_dev *mdev)
 
     if (rx->rx_bufs) {
         for (i = 0; i < rx->count; i++) {
-            if (rx->rx_bufs[i].buf)
-                dma_free_coherent(&pdev->dev, RX_BUF_SIZE,
-                                  rx->rx_bufs[i].buf, rx->rx_bufs[i].dma);
+            if (rx->rx_bufs[i].skb) {
+                dma_unmap_single(&pdev->dev, rx->rx_bufs[i].dma,
+                                 RX_BUF_SIZE, DMA_FROM_DEVICE);
+                dev_kfree_skb_any(rx->rx_bufs[i].skb);
+                rx->rx_bufs[i].skb = NULL;
+            }
         }
         kfree(rx->rx_bufs);
         rx->rx_bufs = NULL;
@@ -402,11 +441,12 @@ static irqreturn_t minimal_irq_handler(int irq, void *dev_id)
  *
  * Per descriptor:
  *  1. Check RX_DONE flag; stop if not yet filled by the device.
- *  2. Allocate an skb and copy the packet bytes from the DMA buffer.
+ *  2. Allocate + DMA-map a replacement skb, unmap the received skb, and pass it
+ *     up the stack directly (zero-copy — the device DMAed straight into it).
  *  3. Let eth_type_trans() detect the L3 protocol and strip the Ethernet header.
  *  4. Pass to napi_gro_receive() for GRO coalescing before stack delivery.
- *  5. Re-arm the descriptor (clear flags, restore full buffer length) so QEMU
- *     can reuse the slot for the next incoming packet.
+ *  5. Re-arm the descriptor (point it at the replacement mapping, clear flags,
+ *     restore full buffer length) so QEMU can reuse the slot.
  *
  * After draining (or hitting budget), write rx->tail to REG_RX_TAIL so the
  * QEMU device knows which descriptors are available again.
@@ -443,21 +483,54 @@ static int minimal_napi_poll(struct napi_struct *napi, int budget)
         dma_rmb();
 
         u16 len = desc->len;
-        struct sk_buff *skb = netdev_alloc_skb_ip_align(mdev->netdev, len);
-        if (likely(skb)) {
-            memcpy(skb_put(skb, len), rx->rx_bufs[i].buf, len);
-            skb->protocol = eth_type_trans(skb, mdev->netdev);
-            mdev->netdev->stats.rx_packets++;
-            mdev->netdev->stats.rx_bytes += len;
-            napi_gro_receive(napi, skb);
-        } else {
-            netdev_warn(mdev->netdev, "  desc[%u] skb alloc failed, dropping\n", i);
+
+        /* Allocate the replacement skb first so the ring slot is never left
+         * without a buffer.  If this fails we recycle the current skb/mapping
+         * in place and drop the frame — keeping the ring full is more
+         * important than delivering one packet under memory pressure. */
+        struct sk_buff *new_skb =
+            netdev_alloc_skb_ip_align(mdev->netdev, RX_BUF_SIZE);
+        if (unlikely(!new_skb)) {
             mdev->netdev->stats.rx_dropped++;
+            desc->len   = RX_BUF_SIZE;
+            dma_wmb();
+            desc->flags = 0;
+            i = (i + 1) % rx->count;
+            work_done++;
+            continue;
         }
 
-        /* Re-arm: clear the done flag and restore the full buffer length.
-         * Ensure the buffer/len stores are visible before the device can see
-         * the cleared flag and reuse the slot. */
+        dma_addr_t new_dma = dma_map_single(&mdev->pdev->dev, new_skb->data,
+                                            RX_BUF_SIZE, DMA_FROM_DEVICE);
+        if (unlikely(dma_mapping_error(&mdev->pdev->dev, new_dma))) {
+            dev_kfree_skb_any(new_skb);
+            mdev->netdev->stats.rx_dropped++;
+            desc->len   = RX_BUF_SIZE;
+            dma_wmb();
+            desc->flags = 0;
+            i = (i + 1) % rx->count;
+            work_done++;
+            continue;
+        }
+
+        /* Hand the received skb up the stack with no copy.  Unmap first so the
+         * CPU owns the buffer before eth_type_trans()/GRO read it. */
+        struct sk_buff *skb = rx->rx_bufs[i].skb;
+        dma_unmap_single(&mdev->pdev->dev, rx->rx_bufs[i].dma,
+                         RX_BUF_SIZE, DMA_FROM_DEVICE);
+
+        skb_put(skb, len);
+        skb->protocol = eth_type_trans(skb, mdev->netdev);
+        mdev->netdev->stats.rx_packets++;
+        mdev->netdev->stats.rx_bytes += len;
+        napi_gro_receive(napi, skb);
+
+        /* Install the replacement skb into the slot and re-arm the descriptor
+         * to point at its mapping.  Ensure the addr/len stores are visible
+         * before the device can see the cleared flag and reuse the slot. */
+        rx->rx_bufs[i].skb = new_skb;
+        rx->rx_bufs[i].dma = new_dma;
+        desc->addr  = new_dma;
         desc->len   = RX_BUF_SIZE;
         dma_wmb();
         desc->flags = 0;
