@@ -48,6 +48,11 @@ the layer list in `layers.conf`. The `build.sh` script sources the build
 environment, writes `conf/local.conf`, adds the layers from `layers.conf`, and
 runs `bitbake`.
 
+- **Build preflight (run in this order):**
+  1. Run `git submodule update --init --recursive` before any `cqfd run`.
+  2. Run `cqfd init` once per host or when `.cqfd/docker/` changes.
+  3. Run `cqfd run` (or `cqfd run ./build.sh -- <command>`) to build.
+
 - **Initialize submodules (required first step):**
   ```bash
   git submodule update --init --recursive
