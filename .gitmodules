@@ -13,3 +13,7 @@
 [submodule "sources/meta-llama-cpp"]
 	path = sources/meta-llama-cpp
 	url = https://github.com/Abhishekojha38/meta-llama-cpp.git
+[submodule "sources/meta-raspberrypi"]
+	path = sources/meta-raspberrypi
+	url = https://git.yoctoproject.org/meta-raspberrypi
+	branch = walnascar
